@@ -29,12 +29,6 @@ import shutil
 import tty, sys, termios
 import warnings
 
-# from __future__ import print_function
-
-import logging
-
-from nupic.encoders.nonuniformscalar import NonUniformScalarEncoder
-from nupic.encoders.sdrcategory import SDRCategoryEncoder
 from nupic.frameworks.opf.modelfactory import ModelFactory
 
 import ch_model_params
@@ -276,8 +270,6 @@ def run():
     modelCh.enableInference({"predictedField": "character"})
 
     modelMs = ModelFactory.create(ms_model_params.MODEL_PARAMS)
-    
-    # trying the timing model without prediction, anomaly only
     modelMs.enableInference({"predictedField": "timing"})
 
 
