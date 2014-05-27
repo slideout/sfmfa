@@ -21,95 +21,45 @@
 # http://numenta.org/licenses/
 # ----------------------------------------------------------------------
 import csv
-import os, time, math, string, random
+import os, time, string
+import math, random, numpy
 import pdb
 import pygame
 import shutil
 import tty, sys, termios
 import warnings
 
+# from __future__ import print_function
+
+import logging
+
+from nupic.encoders.nonuniformscalar import NonUniformScalarEncoder
+from nupic.encoders.sdrcategory import SDRCategoryEncoder
 from nupic.frameworks.opf.modelfactory import ModelFactory
-from nupic.swarming import permutations_runner
 
 import ch_model_params
 import ms_model_params
 
 
 
-SWARM_DEF = "search_def.json"
-CH_SWARM_CONFIG = {
-  "includedFields": [
-    {
-      "fieldName": "character",
-      "fieldType": "string",
-    }
-  ],
-  "streamDef": {
-    "info": "mfaCh",
-    "version": 1,
-    "streams": [
-      {
-        "info": "mfaCh.csv",
-        "source": "file://mfaCh.csv",
-        "columns": [
-          "*"
-        ]
-      }
-    ]
-  },
-  "inferenceType": "TemporalAnomaly",
-  "inferenceArgs": {
-    "predictionSteps": [
-      1
-    ],
-    "predictedField": "character"
-  },
-  "swarmSize": "medium"
-}
-MS_SWARM_CONFIG = {
-  "includedFields": [
-    {
-      "fieldName": "gapMs",
-      "fieldType": "int",
-      "minValue": -250,
-      "maxValue": 5000
-    }
-  ],
-  "streamDef": {
-    "info": "mfa",
-    "version": 1,
-    "streams": [
-      {
-        "info": "mfaTimings.csv",
-        "source": "file://mfaTimings.csv",
-        "columns": [
-          "*"
-        ]
-      }
-    ]
-  },
-
-  "inferenceType": "TemporalAnomaly",
-  "inferenceArgs": {
-    "predictionSteps": [
-      1
-    ],
-    "predictedField": "gapMs"
-  },
-  "swarmSize": "medium"
-}
-
-modelCh = None
-modelMs = None
 
 screen = None
 font = None
 textLines = []
-
-
-
 def gPrint( str, append=False ):
+    """ print to the graphics terminal
+    
+    """
     global screen, font, textLines
+
+    if screen is None:
+        pygame.init()
+        pygame.display.set_caption("SingleEntry MFA")
+        screen = pygame.display.set_mode( [800,300] )
+        screen.fill((0,0,255))    
+        font = pygame.font.Font(None, 25)
+        x = y = 0
+    
 
     while len( textLines ) > (screen.get_height()-30)/20:
         # remove the top line from the list
@@ -137,78 +87,6 @@ def gPrint( str, append=False ):
         y += 20
     
     pygame.display.update()
-    
-    
-    
-
-def swarmData():
-    # prep and per-run cleanup    
-    #    warnings.filterwarnings('error')
-    if os.path.isfile("mfaCh.csv"):
-        os.unlink("mfaCh.csv")
-    if os.path.isfile("mfaTimings.csv"):
-        os.unlink("mfaTimings.csv")
-
-    
-    # simple character data, random
-    f = open("mfaCh.csv", "a")
-    writer = csv.writer(f)
-    writer.writerow(['character'])
-    writer.writerow(['string'])
-    writer.writerow('')
-    for count in range(0,120):
-        ch = random.randint( ord('1'), ord('z'))
-        writer.writerow([ch])
-    f.close()
-
-    # timing data
-    f = open("mfaTimings.csv", "a")
-    writer = csv.writer(f)
-    writer.writerow(["gapMs","reset"])
-    writer.writerow(["int","int"])
-    writer.writerow(['','R'])
-    # load in some context data, so the swarm doesn't over-generalize the
-    # the data that is generated for a single password
-    for count in range(0,50):
-        #writer.writerow( [ 0, 0 ])    # priming seems to distract the swarm, works better with learning 
-        writer.writerow( [ random.randint( ord('1'), ord('z')) * 30, 0 ] )
-        writer.writerow( [ random.randint( ord('1'), ord('z')) * 30, 0 ] )
-        writer.writerow( [ random.randint( -50, 1500 ), 0 ])
-        writer.writerow( [ random.randint( 20, 120 ), 1] )
-    f.close()
-    """
-    # prior version used the password for swarming, but it's too specific a dataset to get a decent swarm 
-    for index in range(len(data)):
-        character = data[index]["character"]
-        if index+1 < len(data):
-            nextCharacter = data[index+1]["character"]
-        else:
-            nextCharacter = 0
-        elapsedMs = data[index]["elapsedMs"]
-        downMs = data[index]["downMs"]
-
-        # simple sequence
-        chWriter.writerow([character])
-        
-        # primer, elapsed+char, down+char, next, de-primer
-        #msWriter.writerow(['R'])
-        msWriter.writerow([0,0])
-        msWriter.writerow([character*30,0])
-        msWriter.writerow([nextCharacter*30,0])
-        msWriter.writerow([elapsedMs,0])
-        msWriter.writerow([downMs,1])
-
-        index += 1
-    """
-
-    permutations_runner.runWithConfig(CH_SWARM_CONFIG, {'maxWorkers': 4, 'overwrite': True})
-    # copy the model info to the current folder
-    shutil.copy("./model_0/model_params.py", "./ch_model_params.py")
-
-    permutations_runner.runWithConfig(MS_SWARM_CONFIG, {'maxWorkers': 4, 'overwrite': True})
-    # copy the model info to the current folder
-    shutil.copy("./model_0/model_params.py", "./ms_model_params.py")
-
 
 
 def recordEntry():
@@ -258,15 +136,6 @@ def recordEntry():
     return results
 
 def getChars():
-    """ old way, which can't get key down/up events 
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(sys.stdin.fileno())
-        ch = sys.stdin.read(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    """
     keystrokes = []
     while True:
         # if there are keystrokes, and all of them have an up time, finish
@@ -303,17 +172,88 @@ def currentTime():
     return int(round(time.time() * 1000))
 
 def readData( data, index ):
-    # scale the character data up into the high range of the predictor
-    # so that they can be learned as a sequence, vs parallel data
-    character = data[index]["character"] * 30
+    character = chr(data[index]["character"])
     if index+1 < len(data):
-        nextCharacter = data[index+1]["character"] * 30
+        nextCharacter = chr(data[index+1]["character"])
     else:
-        nextCharacter = 0
+        nextCharacter = ' '
     elapsedMs = data[index]["elapsedMs"]
     downMs = data[index]["downMs"]
     
     return character, nextCharacter, elapsedMs, downMs
+
+
+
+def getFilename( mode ):
+    filename = 'mfa'
+    if mode == 'learn':
+        filename += 'Learn'
+    elif mode == 'test':
+        filename += 'Test'
+    filename += ".csv"
+    return filename
+        
+        
+
+
+def learnData( mode ):
+    """ read and save passphrase keystroke data
+    
+        mode='learn'  record three sequences of the passphrase and save the data for later
+    
+        mode='test'   record a single passphrase and save for testing
+    
+    
+    """
+
+    # setup the output files and prep them
+    filename = getFilename( mode )    
+    if os.path.isfile( filename ):
+        os.unlink( filename )
+    f = open(filename, "a")
+    writer = csv.writer(f)
+    writer.writerow(["character","nextCharacter", "elapsedMs", "downMs", "reset"])
+    writer.writerow(["string","string", "int","int","int"])
+    writer.writerow(['','','','','R'])
+    
+
+    for count in range(3 if mode  == 'learn' else 1):
+        if mode == 'learn':
+            gPrint( 'Enter your password/passphrase (pass #' + str( count ) + "): ", False )
+        elif mode == 'test':
+            gPrint( 'Enter the testing password/passphrase: ', False )
+        
+        # the keystroke recording method, returns a list of char and timing data back
+        data = recordEntry()
+
+        for index in range(len(data)):
+            character, nextCharacter, elapsedMs, downMs = readData( data, index )
+            writer.writerow( [character,nextCharacter,elapsedMs,downMs,0 if index<len(data)-1 else 1])
+    
+    f.close()
+
+
+
+def loadData( mode ):
+    filename = getFilename( mode )    
+    f = open(filename, "r")
+    reader = csv.reader(f)
+
+    # skip headers
+    reader.next()
+    reader.next()
+    reader.next()
+    
+    data = []
+    phrase = []
+    for row in reader:
+        phrase.append( { 'character': row[0], 'nextCharacter': row[1], 'elapsedMs': int(row[2]), 'downMs': int(row[3]) } )
+        if int(row[4]) == 1:
+            data.append( phrase )
+            phrase = []
+        
+    return data
+
 
 def readResult( result, cur, total, count ):
     
@@ -327,151 +267,115 @@ def readResult( result, cur, total, count ):
     
     return cur, total, count
 
-def toCh( ch ):
-    return chr( ch / 30 )
 
 
-
-
-def learnUser():
-    global modelCh, modelMs
-
-    # get a simple password
-    for count in range(3):
-        gPrint( 'Enter your password (pass #' + str( count ) + "): ", False )
+def run():
         
-        # the keystroke recording method, returns a list of char and timing data back
-        data = recordEntry()
+    # setup the models
+    modelCh = ModelFactory.create(ch_model_params.MODEL_PARAMS)
+    modelCh.enableInference({"predictedField": "character"})
 
+    modelMs = ModelFactory.create(ms_model_params.MODEL_PARAMS)
+    
+    # trying the timing model without prediction, anomaly only
+    modelMs.enableInference({"predictedField": "timing"})
+
+
+    # train both models on the learned data, then run the test data through both models
+    for mode in ['learn','test']:
+        # returns a list of lists, each index is a passphrase sequence
+        data = loadData( mode )
+        
+        chAS = "Character sequence anomalies (" + mode + "):  [Character]:AnomalyScore"
+        msAS = "Transition timing anomalies (" + mode + "):  [Character/NextCharacter/ElapsedMs/DownMs]:sum(AnomalyScore)"
         totalAnomaly = 0.0
         sampleCount = 0
         curAnomaly = 0
 
-        chAS = "Ch anomalies: "
-        msAS = "Ms anomalies: "
-        for index in range(len(data)):
-            character, nextCharacter, elapsedMs, downMs = readData( data, index )
+        if mode == 'test':
+            modelCh.disableLearning()
+            modelMs.disableLearning()
+        
+        for count in range(25 if mode == 'learn' else 1):
+            if mode == 'learn':
+                sys.stdout.write( 'Learning pass: ' + str(count) + '\r' )
+            sys.stdout.flush()
 
-            # train the character model
-            result = modelCh.run({"character": character})
-            curAnomaly = readResult( result, 0, 0, 0 )[0]
-            chAS += " [" + toCh(character) + "]:" + str(curAnomaly)
-
-            # train the timing/subSequence model
+            phrase = data[random.randrange( len(data) )]
             
-            #result = modelMs.run({"gapMs": 0})
-            #curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
-            for count in range(5):
-                # subsequencing and priming
+            modelCh.resetSequenceStates()
+            modelCh.run( {'character':' '})     # character priming
+            chAS += '\n                    '
+            
+            msAS += '\n                    '
+            
+            for index in range(len(phrase)):
+                row = phrase[index]
+                
+                # train the character model
+                result = modelCh.run({'character': row[ 'character'] })
+                curAnomaly = readResult( result, 0, 0, 0 )[0]
+                chAS += " [" + row['character'] + "]:" + str(curAnomaly)
+            
+                # train the timing/subsequence model
                 modelMs.resetSequenceStates()
-                result = modelMs.run({"gapMs": 0})
-                curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
+    
+                # subsequencing / priming
+                result = modelMs.run( {'character':' ', 'timing':None })
                 
                 curAnomaly = 0
-                result = modelMs.run({"gapMs": character})
+                result = modelMs.run( {'character':row['character'], 'timing':None }) 
                 curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
-                result = modelMs.run({"gapMs": nextCharacter})
+    
+                result = modelMs.run( {'character':row['nextCharacter'], 'timing':None }) 
                 curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
-                result = modelMs.run({"gapMs": elapsedMs})
+                
+                result = modelMs.run( {'character':None, 'timing':row['elapsedMs'] }) 
                 curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
-                result = modelMs.run({"gapMs": downMs})
+    
+                result = modelMs.run( {'character':None, 'timing':row['downMs'] }) 
                 curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
+    
+                msAS += " [" + row['character'] + "/" + row['nextCharacter'] +"/" + str(row['elapsedMs']) + "/" + str(row['downMs'])+ "]:" + str(curAnomaly)
+                
+        
+        print( "                     \n" )
+        print( "      " + chAS )
+        print( "      " + msAS )
+        
+        if mode == 'test':
+            # show whether the tested data matched the trained data
+            passFail = "Probable pass"
             
-            msAS += " [" + toCh(character) + "/" + toCh(nextCharacter) +"][" + str(elapsedMs) + "e/" + str(downMs)+ "d]:" + str(curAnomaly/4)
-
-                   
-        gPrint( "   Learning pass: " + str(count) + ", avg anomaly score: " + str(float(totalAnomaly)/float(sampleCount)) )
-        gPrint( "      " + chAS )
-        gPrint( "      " + msAS )
+            # this may be an overly simple way to predict failure, look at Subutai's anomaly histogram code and integrate someday        
+            if totalAnomaly > .5:
+                passFail = "Probable fail"
+            print( "Total anomaly: " + str(totalAnomaly) + ": " + passFail )
         
 
 
 
 if __name__ == "__main__":
-    # if swarming is on, swarm and exit
-    if len(sys.argv) > 1  and sys.argv[1] == "swarm":
-        swarmData()
+    
+    if len(sys.argv) == 0:
+        print 'mfa [runType]'
+        print '   runTypes:'
+        print '       learn - record keystroke data for learning'
+        print '       test  - record keystroke data for testing'
+        print '       run   - train the model with learned data, then run the test data and output anomaly info'
         sys.exit()
 
-    pygame.init()
-    pygame.display.set_caption("SingleEntry MFA")
-    screen = pygame.display.set_mode( [800,300] )
-    screen.fill((0,0,255))    
-    font = pygame.font.Font(None, 25)
-    x = y = 0
+    if sys.argv[1] == 'learn':
+        learnData( 'learn')
+        sys.exit()
 
-    # setup the models
-    modelCh = ModelFactory.create(ch_model_params.MODEL_PARAMS)
-    modelCh.enableInference({"predictedField": "character"})
-    modelMs = ModelFactory.create(ms_model_params.MODEL_PARAMS)
-    modelMs.enableInference({"predictedField": "gapMs"})
-
-    # train the cla on the data
-    learnUser()
-    gPrint( "Model trained, beginning test mode" )
-  
-    # disable learning, and loop until a blank passphrase was entered
-    # checking each one for cumulative anomaly score
-    modelCh.disableLearning()
-    modelMs.disableLearning()
-    while True:
-        gPrint( "Test your password: " )
-        data = recordEntry()
-        if len(data) == 0:
-            break;
-
-
-        # pdb.set_trace()
-
-        totalAnomaly = 0
-        sampleCount = 0
-        curAnomaly = 0
-        chAS = "Ch anomalies: "
-        msAS = "Ms anomalies: "
-        for index in range(len(data)):
-            character, nextCharacter, elapsedMs, downMs = readData( data, index )
-
-            # test character sequence anomaly
-            curAnomaly = 0  # ignore anomaly on the primer input
-            result = modelCh.run({"character": character})
-            curAnomaly,totalAnomaly,sampleCount = readResult( result, 0, totalAnomaly, sampleCount )
-            chAS += " [" + toCh(character) + "]:" + str(curAnomaly)
-             
-            
-            # now the timing anomaly
-
-            # subsequence and priming
-            modelMs.resetSequenceStates()
-            # primer, ignored
-            modelMs.run({"gapMs": 0})
-
-            # start char, end char, elapsed, down            
-            curAnomaly = 0
-            result = modelMs.run({"gapMs": character})
-            curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
-            result = modelMs.run({"gapMs": nextCharacter})
-            curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
-            result = modelMs.run({"gapMs": elapsedMs})
-            curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
-            result = modelMs.run({"gapMs": downMs})
-            curAnomaly,totalAnomaly,sampleCount = readResult( result, curAnomaly, totalAnomaly, sampleCount )
-                    
-            msAS += " [" + toCh(character) + "->" + toCh(nextCharacter) +"][" + str(elapsedMs) + "e/" + str(downMs)+ "d]:" + str(curAnomaly/4)
-
-
-        gPrint( "   Testing pass: avg anomaly score: " + str(float(totalAnomaly)/float(sampleCount)) )
-        gPrint( "      " + chAS )
-        gPrint( "      " + msAS )
-
-        # show whether the trained user typed the right password
-        passFail = "Probable pass"
-        avgAnomaly = float(totalAnomaly)/float(sampleCount)
+    if sys.argv[1] == 'test':
+        learnData( 'test' )
+        sys.exit()
         
-        # this is a silly way to predict failure, look at Subutai's anomaly histogram code and integrate someday        
-        if avgAnomaly > .1:
-            passFail = "Probable fail"
-        gPrint( "Overall anomaly: " + str(avgAnomaly) + ": " + passFail )
-  
+    if sys.argv[1] == 'run':
+        run()
+        sys.exit()
 
 
 
